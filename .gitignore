@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*$py.class
+*.pyo
+*.pyd
+.eggs/
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Виртуальные окружения
+venv/
+.venv/
+env/
+
+# Секреты и локальный конфиг
+.env
+
+# IDE / редакторы
+.idea/
+.vscode/
+*.code-workspace
+
+# Логи и кэш
+*.log
+logs/
+
+# Временные файлы
+*.tmp
+*.bak
+
+# Системные
+.DS_Store
+Thumbs.db

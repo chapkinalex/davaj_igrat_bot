@@ -1,49 +1,21 @@
-import asyncio
-from aiogram import Bot, Dispatcher, types
+"""Обработчики бота «Давай играть»."""
+from datetime import datetime
+from aiogram import types
 from aiogram.filters import CommandStart
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from games_data import GAMES
-from datetime import datetime
 
+from bot.main import (
+    bot,
+    dp,
+    user_state,
+    user_favorites,
+    user_progress,
+    user_history,
+    user_games_journal,
+    children,
+)
+from data.games import GAMES
 
-TOKEN = "8519012332:AAH132h9QFN6n1ymxHX3oea3N2A-0y9lq6U"
-
-bot = Bot(token=TOKEN)
-dp = Dispatcher()
-
-user_state = {}
-user_favorites = {}  # user_id -> set(game_id)
-
-# ---- ХРАНЕНИЕ ПРОГРЕССА ПОЛЬЗОВАТЕЛЕЙ ----
-# Ключ: (user_id, child_name) — чтобы прогресс был разный по детям.
-
-user_progress = {}
-
-
-# ---- ИСТОРИЯ ДИАГНОСТИК ----
-user_history = {}  # user_id -> list of diagnostics
-
-user_games_journal = {}  # user_id -> list of {"game_id": ..., "status": ...}
-
-# ---- ПРОФИЛИ ДЕТЕЙ ----
-# children[user_id] = [
-#     {"name": "Маша", "age_code": "age_7_10"},
-#     {"name": "Лёша", "age_code": "age_6_7"},
-# ]
-children = {}
-
-
-
-
-# Как это будет выглядеть внутри (пример):
-# user_progress[user_id] = {
-#     "focus": "contact",      # или "conflicts", или "self_help"
-#     "step": 1,               # номер шага, на котором остановились
-#     "last_game_id": None,    # ID последней игры (добавим позже)
-#     "last_diagnosis_id": None,  # ID последней диагностики (добавим позже)
-# }
-
-# /start — главный экран
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     """
@@ -2498,11 +2470,3 @@ async def show_game_card(message, game, age_text, problems_codes, problem_map):
 
 
     await message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-print("Бот запускается...")
-
-async def main():
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())

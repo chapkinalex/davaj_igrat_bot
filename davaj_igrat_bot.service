@@ -1,0 +1,28 @@
+# Systemd unit для Telegram-бота «Давай играть»
+# deploy_on_server.sh подставит пользователя и путь к проекту.
+
+[Unit]
+Description=Telegram bot «Давай играть»
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+User=YOUR_USER
+WorkingDirectory=/home/ubuntu/davai_sigrai_bot
+
+# Переменные из .env (минус = файл может отсутствовать)
+EnvironmentFile=-/home/ubuntu/davai_sigrai_bot/.env
+
+# Запуск через venv
+ExecStart=/home/ubuntu/davai_sigrai_bot/venv/bin/python main.py
+
+Restart=always
+RestartSec=5
+
+StandardOutput=append:/home/ubuntu/davai_sigrai_bot/logs/bot_stdout.log
+StandardError=append:/home/ubuntu/davai_sigrai_bot/logs/bot_stderr.log
+
+[Install]
+WantedBy=multi-user.target
