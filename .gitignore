@@ -35,3 +35,6 @@ logs/
 # Системные
 .DS_Store
 Thumbs.db
+
+data/bot.db
+windscribe.sh
