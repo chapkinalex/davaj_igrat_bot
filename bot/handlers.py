@@ -4,15 +4,22 @@ from aiogram import types
 from aiogram.filters import CommandStart
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
-from bot.main import (
-    bot,
-    dp,
-    user_state,
-    user_favorites,
-    user_progress,
-    user_history,
-    user_games_journal,
-    children,
+from bot.main import bot, dp
+from data.database import (
+    get_user_state,
+    set_user_state,
+    get_user_favorites,
+    set_user_favorites,
+    get_user_progress,
+    set_user_progress,
+    get_user_history,
+    set_user_history,
+    get_user_games_journal,
+    set_user_games_journal,
+    get_children,
+    set_children,
+    user_progress_row_exists,
+    user_state_row_exists,
 )
 from data.games import GAMES
 
@@ -335,7 +342,7 @@ async def start_diagnostics(callback: types.CallbackQuery):
     """
     await callback.answer()
     user_id = callback.from_user.id
-    user_children = children.get(user_id, [])
+    user_children = get_children(user_id)
 
     # Если нет ни одного ребёнка — предлагаем добавить
     if not user_children:
@@ -416,9 +423,9 @@ async def add_child(callback: types.CallbackQuery):
     await callback.answer()
 
     user_id = callback.from_user.id
-    state = user_state.get(user_id, {})
+    state = get_user_state(user_id)
     state["awaiting_child_name"] = True
-    user_state[user_id] = state
+    set_user_state(user_id, state)
 
     await callback.message.edit_text(
         "Напишите, пожалуйста, имя ребёнка, для которого будем подбирать игры и шаги.\n\n"
@@ -433,14 +440,17 @@ async def age_selected(callback: types.CallbackQuery):
     user_id = callback.from_user.id
 
     # Сохраняем возраст и обнуляем состояние
-    user_state[user_id] = {
-        "age": callback.data,
-        "child_behaviour": [],   # поведение ребёнка
-        "parent_state": [],      # сюда добавим позже
-        "family_dynamic": [],    # сюда добавим позже
-        "current_index": 0,
-        "diag_done": False
-    }
+    set_user_state(
+        user_id,
+        {
+            "age": callback.data,
+            "child_behaviour": [],   # поведение ребёнка
+            "parent_state": [],      # сюда добавим позже
+            "family_dynamic": [],    # сюда добавим позже
+            "current_index": 0,
+            "diag_done": False,
+        },
+    )
 
     # Первый вопрос мини-диагностики
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -583,7 +593,7 @@ FAMILY_DYNAMIC_LABELS = {
 @dp.callback_query(lambda c: c.data.startswith("diag_main_"))
 async def diag_main_selected(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    state = user_state.get(user_id)
+    state = get_user_state(user_id)
 
     if not state:
         await callback.answer("Сначала выбери возраст 🙂", show_alert=True)
@@ -601,7 +611,7 @@ async def diag_main_selected(callback: types.CallbackQuery):
 
     base_problems = mapping.get(main_choice, [])
     state["problems"] = base_problems
-    user_state[user_id] = state
+    set_user_state(user_id, state)
 
     # Переходим к экрану «Поведение ребёнка»
     await callback.message.edit_text(
@@ -615,7 +625,7 @@ async def diag_main_selected(callback: types.CallbackQuery):
 @dp.callback_query(lambda c: c.data == "diag_skip")
 async def diag_skip(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    state = user_state.get(user_id)
+    state = get_user_state(user_id)
 
     if not state:
         await callback.answer("Сначала выбери возраст 🙂", show_alert=True)
@@ -633,17 +643,21 @@ async def diag_skip(callback: types.CallbackQuery):
 async def child_behaviour_selected(callback: types.CallbackQuery):
     user_id = callback.from_user.id
 
-    if user_id not in user_state:
-        user_state[user_id] = {
-            "age": None,
-            "child_behaviour": [],
-            "parent_state": [],
-            "family_dynamic": [],
-            "current_index": 0
-        }
+    if not user_state_row_exists(user_id):
+        set_user_state(
+            user_id,
+            {
+                "age": None,
+                "child_behaviour": [],
+                "parent_state": [],
+                "family_dynamic": [],
+                "current_index": 0,
+            },
+        )
 
+    st = dict(get_user_state(user_id))
     beh_code = callback.data  # beh_disobedience, beh_rude и т.п.
-    behaviours = user_state[user_id].get("child_behaviour", [])
+    behaviours = list(st.get("child_behaviour", []))
 
     if beh_code not in behaviours:
         behaviours.append(beh_code)
@@ -652,14 +666,15 @@ async def child_behaviour_selected(callback: types.CallbackQuery):
         behaviours.remove(beh_code)
         await callback.answer("❌ Убрано")
 
-    user_state[user_id]["child_behaviour"] = behaviours
+    st["child_behaviour"] = behaviours
+    set_user_state(user_id, st)
 
 
 # Кнопка «Далее» после поведения ребёнка
 @dp.callback_query(lambda c: c.data == "child_behaviour_next")
 async def child_behaviour_next(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    state = user_state.get(user_id)
+    state = get_user_state(user_id)
 
     if not state or not state.get("child_behaviour"):
         await callback.answer("Отметь хотя бы один пункт про поведение ребёнка 🙂", show_alert=True)
@@ -676,17 +691,21 @@ async def child_behaviour_next(callback: types.CallbackQuery):
 async def parent_state_selected(callback: types.CallbackQuery):
     user_id = callback.from_user.id
 
-    if user_id not in user_state:
-        user_state[user_id] = {
-            "age": None,
-            "child_behaviour": [],
-            "parent_state": [],
-            "family_dynamic": [],
-            "current_index": 0
-        }
+    if not user_state_row_exists(user_id):
+        set_user_state(
+            user_id,
+            {
+                "age": None,
+                "child_behaviour": [],
+                "parent_state": [],
+                "family_dynamic": [],
+                "current_index": 0,
+            },
+        )
 
+    st = dict(get_user_state(user_id))
     ps_code = callback.data  # ps_burnout, ps_future_anxiety и т.п.
-    states = user_state[user_id].get("parent_state", [])
+    states = list(st.get("parent_state", []))
 
     if ps_code not in states:
         states.append(ps_code)
@@ -695,14 +714,15 @@ async def parent_state_selected(callback: types.CallbackQuery):
         states.remove(ps_code)
         await callback.answer("❌ Убрано")
 
-    user_state[user_id]["parent_state"] = states
+    st["parent_state"] = states
+    set_user_state(user_id, st)
 
 
 # Кнопка «Далее» после состояний родителя
 @dp.callback_query(lambda c: c.data == "parent_state_next")
 async def parent_state_next(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    state = user_state.get(user_id)
+    state = get_user_state(user_id)
 
     if not state or not state.get("parent_state"):
         await callback.answer("Отметь хотя бы один пункт про себя 🙂", show_alert=True)
@@ -715,7 +735,7 @@ async def parent_state_next(callback: types.CallbackQuery):
             suitable_ids.append(game["id"])
     
     state["suitable_ids"] = suitable_ids if suitable_ids else [g["id"] for g in GAMES[:5]]  # если ничего не подошло, берём первые 5
-    user_state[user_id] = state
+    set_user_state(user_id, state)
 
     await callback.message.edit_text(
         "Теперь посмотрим на семейную ситуацию.\n\n"
@@ -728,17 +748,21 @@ async def parent_state_next(callback: types.CallbackQuery):
 async def family_dynamic_selected(callback: types.CallbackQuery):
     user_id = callback.from_user.id
 
-    if user_id not in user_state:
-        user_state[user_id] = {
-            "age": None,
-            "child_behaviour": [],
-            "parent_state": [],
-            "family_dynamic": [],
-            "current_index": 0
-        }
+    if not user_state_row_exists(user_id):
+        set_user_state(
+            user_id,
+            {
+                "age": None,
+                "child_behaviour": [],
+                "parent_state": [],
+                "family_dynamic": [],
+                "current_index": 0,
+            },
+        )
 
+    st = dict(get_user_state(user_id))
     fam_code = callback.data  # fam_different_approaches и т.п.
-    dyn = user_state[user_id].get("family_dynamic", [])
+    dyn = list(st.get("family_dynamic", []))
 
     if fam_code not in dyn:
         dyn.append(fam_code)
@@ -747,14 +771,15 @@ async def family_dynamic_selected(callback: types.CallbackQuery):
         dyn.remove(fam_code)
         await callback.answer("❌ Убрано")
 
-    user_state[user_id]["family_dynamic"] = dyn
+    st["family_dynamic"] = dyn
+    set_user_state(user_id, st)
 
 
 # Завершение диагностики по семейной динамике
 @dp.callback_query(lambda c: c.data == "family_dynamic_done")
 async def family_dynamic_done(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    state = user_state.get(user_id)
+    state = get_user_state(user_id)
 
     if not state or not state.get("family_dynamic"):
         await callback.answer("Отметь хотя бы один пункт про семью 🙂", show_alert=True)
@@ -766,12 +791,16 @@ async def family_dynamic_done(callback: types.CallbackQuery):
     child_name = state.get("child_name")
 
 
-    user_progress[(user_id, child_name)] = {
-    "focus": None,
-    "step": 1,
-    "last_game_id": None,
-    "last_diagnosis_id": datetime.now().strftime("%d.%m.%Y %H:%M"),
-    }
+    set_user_progress(
+        user_id,
+        child_name,
+        {
+            "focus": None,
+            "step": 1,
+            "last_game_id": None,
+            "last_diagnosis_id": datetime.now().strftime("%d.%m.%Y %H:%M"),
+        },
+    )
 
 
 
@@ -793,7 +822,7 @@ async def family_dynamic_done(callback: types.CallbackQuery):
 
 
     # Берём всю историю пользователя
-    full_history = user_history.get(user_id, [])
+    full_history = get_user_history(user_id)
 
     comparison_text = None
 
@@ -826,7 +855,7 @@ async def family_dynamic_done(callback: types.CallbackQuery):
 
     # Добавляем текущую диагностику в общую историю (для всех детей)
     full_history.append(record)
-    user_history[user_id] = full_history
+    set_user_history(user_id, full_history)
 
     # Если есть текст сравнения — отправляем его отдельно
     if comparison_text:
@@ -845,11 +874,12 @@ async def family_dynamic_done(callback: types.CallbackQuery):
 async def problem_selected(callback: types.CallbackQuery):
     user_id = callback.from_user.id
 
-    if user_id not in user_state:
-        user_state[user_id] = {"age": None, "problems": [], "current_index": 0}
+    if not user_state_row_exists(user_id):
+        set_user_state(user_id, {"age": None, "problems": [], "current_index": 0})
 
+    st = dict(get_user_state(user_id))
     problem_code = callback.data
-    problems = user_state[user_id]["problems"]
+    problems = list(st["problems"])
 
     if problem_code not in problems:
         problems.append(problem_code)
@@ -858,13 +888,14 @@ async def problem_selected(callback: types.CallbackQuery):
         problems.remove(problem_code)
         await callback.answer("❌ Убрано")
 
-    user_state[user_id]["problems"] = problems
+    st["problems"] = problems
+    set_user_state(user_id, st)
 
 
 # Показать первую игру
 async def show_result(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    state = user_state.get(user_id, {})
+    state = get_user_state(user_id)
 
     # 1. Достаём ответы пользователя
     age = state.get("age")
@@ -876,7 +907,7 @@ async def show_result(callback: types.CallbackQuery):
     result_parts = []
 
     # 📊 Простейшее сравнение с предыдущей диагностикой (по количеству отмеченных пунктов)
-    history = user_history.get(user_id, [])
+    history = get_user_history(user_id)
     comparison_text = None
 
     if history:
@@ -976,22 +1007,26 @@ async def focus_contact(callback: types.CallbackQuery):
     await callback.answer()
 
     user_id = callback.from_user.id
-    state = user_state.get(user_id, {})
+    state = get_user_state(user_id)
     state["focus"] = "contact"
     state["focus_step"] = 3
-    user_state[user_id] = state
+    set_user_state(user_id, state)
 
     # Обновляем прогресс для кнопки "Продолжить"
     # Здесь мы чётко фиксируем, что выбран фокус "contact" и пользователь на самом начале пути.
     child_name = state.get("child_name")
     key = (user_id, child_name)
 
-    user_progress[key] = {
-    "focus": "contact",
-    "step": 1,
-    "last_game_id": None,
-    "last_diagnosis_id": user_progress.get(key, {}).get("last_diagnosis_id"),
-    }
+    set_user_progress(
+        key[0],
+        key[1],
+        {
+            "focus": "contact",
+            "step": 1,
+            "last_game_id": None,
+            "last_diagnosis_id": (get_user_progress(key[0], key[1]) or {}).get("last_diagnosis_id"),
+        },
+    )
 
 
 
@@ -1021,20 +1056,24 @@ async def focus_conflicts(callback: types.CallbackQuery):
     await callback.answer()
 
     user_id = callback.from_user.id
-    state = user_state.get(user_id, {})
+    state = get_user_state(user_id)
     state["focus"] = "conflicts"
     state["focus_step"] = 3
-    user_state[user_id] = state
+    set_user_state(user_id, state)
 
     child_name = state.get("child_name")
     key = (user_id, child_name)
 
-    user_progress[key] = {
-    "focus": "conflicts",
-    "step": 1,
-    "last_game_id": None,
-    "last_diagnosis_id": user_progress.get(key, {}).get("last_diagnosis_id"),
-    }
+    set_user_progress(
+        key[0],
+        key[1],
+        {
+            "focus": "conflicts",
+            "step": 1,
+            "last_game_id": None,
+            "last_diagnosis_id": (get_user_progress(key[0], key[1]) or {}).get("last_diagnosis_id"),
+        },
+    )
 
 
 
@@ -1062,19 +1101,23 @@ async def focus_selfcare(callback: types.CallbackQuery):
     await callback.answer()
 
     user_id = callback.from_user.id
-    state = user_state.get(user_id, {})
+    state = get_user_state(user_id)
     state["focus"] = "selfcare"
     state["focus_step"] = 3
-    user_state[user_id] = state
+    set_user_state(user_id, state)
 
     child_name = state.get("child_name")
     key = (user_id, child_name)
-    user_progress[key] = {
-        "focus": "self_help",  # как и было, чтобы совпадало с continue_route
-        "step": 1,
-        "last_game_id": None,
-        "last_diagnosis_id": user_progress.get(key, {}).get("last_diagnosis_id"),
-    }
+    set_user_progress(
+        key[0],
+        key[1],
+        {
+            "focus": "self_help",  # как и было, чтобы совпадало с continue_route
+            "step": 1,
+            "last_game_id": None,
+            "last_diagnosis_id": (get_user_progress(key[0], key[1]) or {}).get("last_diagnosis_id"),
+        },
+    )
 
     text = (
         "💚 Больше опоры для себя\n\n"
@@ -1099,7 +1142,7 @@ async def focus_games_current(callback: types.CallbackQuery):
     await callback.answer()
 
     user_id = callback.from_user.id
-    state = user_state.get(user_id)
+    state = get_user_state(user_id)
 
     # Если по какой-то причине ещё нет подобранных игр
     if not state or "suitable_ids" not in state or not state["suitable_ids"]:
@@ -1112,7 +1155,7 @@ async def focus_games_current(callback: types.CallbackQuery):
 
     # Сбрасываем индекс, чтобы начать показ игр с начала
     state["current_index"] = -1
-    user_state[user_id] = state
+    set_user_state(user_id, state)
 
     # Используем уже существующую логику показа игр
     await next_game(callback)
@@ -1123,7 +1166,7 @@ async def focus_more_step(callback: types.CallbackQuery):
     await callback.answer()
 
     user_id = callback.from_user.id
-    state = user_state.get(user_id, {})
+    state = get_user_state(user_id)
     focus = state.get("focus")
     step = state.get("focus_step", 1)
 
@@ -1320,14 +1363,15 @@ async def focus_more_step(callback: types.CallbackQuery):
 
     # Обновляем номер шага: плюс 2, но не больше 10
     state["focus_step"] = min(step + 2, 10)
-    user_state[user_id] = state
+    set_user_state(user_id, state)
 
     # Обновляем step в user_progress
     child_name = state.get("child_name")
     if child_name:
-        key = (user_id, child_name)
-        if key in user_progress:
-            user_progress[key]["step"] = state["focus_step"]
+        if user_progress_row_exists(user_id, child_name):
+            prog = dict(get_user_progress(user_id, child_name) or {})
+            prog["step"] = state["focus_step"]
+            set_user_progress(user_id, child_name, prog)
 
     await callback.message.answer(
         text,
@@ -1339,7 +1383,7 @@ async def focus_more_step(callback: types.CallbackQuery):
 @dp.callback_query(lambda c: c.data == "after_scenario_next")
 async def after_scenario_next(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    state = user_state.get(user_id)
+    state = get_user_state(user_id)
 
     if not state or "suitable_ids" not in state:
         await callback.answer("Сначала пройди мини‑диагностику 🙂", show_alert=True)
@@ -1380,7 +1424,7 @@ async def after_scenario_next(callback: types.CallbackQuery):
 @dp.callback_query(lambda c: c.data == "next_game")
 async def next_game(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    state = user_state.get(user_id)
+    state = get_user_state(user_id)
 
     if not state or "suitable_ids" not in state:
         await callback.answer("Сначала подбери игры через «Показать результат» 🙂", show_alert=True)
@@ -1407,7 +1451,7 @@ async def next_game(callback: types.CallbackQuery):
 
     idx = (idx + 1) % len(ids)
     state["current_index"] = idx
-    user_state[user_id] = state
+    set_user_state(user_id, state)
 
     game_id = ids[idx]
     game = next(g for g in GAMES if g["id"] == game_id)
@@ -1425,10 +1469,10 @@ async def mark_game_played(callback: types.CallbackQuery):
         return
 
     # Сохраняем game_id во временное хранилище, чтобы потом использовать в опросе
-    if user_id not in user_state:
-        user_state[user_id] = {}
-    user_state[user_id]["current_game_id"] = game_id
-    user_state[user_id]["current_game_status"] = "played"
+    st = dict(get_user_state(user_id))
+    st["current_game_id"] = game_id
+    st["current_game_status"] = "played"
+    set_user_state(user_id, st)
 
     # Показываем вопрос вместо сразу сохранения
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1454,9 +1498,9 @@ async def rating_liked(callback: types.CallbackQuery):
         return
 
     # Сохраняем рейтинг
-    if user_id not in user_state:
-        user_state[user_id] = {}
-    user_state[user_id]["current_game_rating"] = "liked"
+    st = dict(get_user_state(user_id))
+    st["current_game_rating"] = "liked"
+    set_user_state(user_id, st)
 
     # Показываем вопрос о причине
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1484,9 +1528,9 @@ async def rating_disliked(callback: types.CallbackQuery):
         return
 
     # Сохраняем рейтинг
-    if user_id not in user_state:
-        user_state[user_id] = {}
-    user_state[user_id]["current_game_rating"] = "disliked"
+    st = dict(get_user_state(user_id))
+    st["current_game_rating"] = "disliked"
+    set_user_state(user_id, st)
 
     # Показываем вопрос о причине
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1513,7 +1557,7 @@ async def save_game_feedback(callback: types.CallbackQuery):
         await callback.answer("Ошибка при сохранении отзыва", show_alert=True)
         return
 
-    state = user_state.get(user_id, {})
+    state = get_user_state(user_id)
     status = state.get("current_game_status", "played")
     rating = state.get("current_game_rating", "liked")
 
@@ -1544,7 +1588,7 @@ async def save_game_feedback(callback: types.CallbackQuery):
     reason_text = reason_map.get(reason_key, "Без причины")
 
     # Сохраняем в журнал
-    journal = user_games_journal.get(user_id, [])
+    journal = get_user_games_journal(user_id)
     journal.append({
         "game_id": game_id,
         "status": status,
@@ -1552,12 +1596,14 @@ async def save_game_feedback(callback: types.CallbackQuery):
         "reason": reason_text,
         "created_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
     })
-    user_games_journal[user_id] = journal
+    set_user_games_journal(user_id, journal)
 
     # Очищаем временные данные
-    user_state[user_id]["current_game_id"] = None
-    user_state[user_id]["current_game_status"] = None
-    user_state[user_id]["current_game_rating"] = None
+    st = dict(get_user_state(user_id))
+    st["current_game_id"] = None
+    st["current_game_status"] = None
+    st["current_game_rating"] = None
+    set_user_state(user_id, st)
 
     await callback.answer()
     await callback.message.edit_text(
@@ -1582,10 +1628,10 @@ async def mark_game_not_played(callback: types.CallbackQuery):
         return
 
     # Сохраняем game_id во временное хранилище
-    if user_id not in user_state:
-        user_state[user_id] = {}
-    user_state[user_id]["current_game_id"] = game_id
-    user_state[user_id]["current_game_status"] = "not_played"
+    st = dict(get_user_state(user_id))
+    st["current_game_id"] = game_id
+    st["current_game_status"] = "not_played"
+    set_user_state(user_id, st)
 
     # Показываем вопрос вместо сразу сохранения
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1614,10 +1660,9 @@ async def add_to_favorites(callback: types.CallbackQuery):
         await callback.answer("Не удалось сохранить игру 😔", show_alert=True)
         return
 
-    if user_id not in user_favorites:
-        user_favorites[user_id] = set()
-
-    user_favorites[user_id].add(game_id)
+    favs = set(get_user_favorites(user_id))
+    favs.add(game_id)
+    set_user_favorites(user_id, favs)
     await callback.answer("💾 Игра сохранена в избранное!", show_alert=False)
 
 @dp.callback_query(lambda c: c.data.startswith("rating_retry_"))
@@ -1631,9 +1676,9 @@ async def rating_retry(callback: types.CallbackQuery):
         return
 
     # Сохраняем выбор
-    if user_id not in user_state:
-        user_state[user_id] = {}
-    user_state[user_id]["current_game_rating"] = "retry"
+    st = dict(get_user_state(user_id))
+    st["current_game_rating"] = "retry"
+    set_user_state(user_id, st)
 
     # Показываем вопрос о причине
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1661,9 +1706,9 @@ async def rating_skip(callback: types.CallbackQuery):
         return
 
     # Сохраняем выбор
-    if user_id not in user_state:
-        user_state[user_id] = {}
-    user_state[user_id]["current_game_rating"] = "skip"
+    st = dict(get_user_state(user_id))
+    st["current_game_rating"] = "skip"
+    set_user_state(user_id, st)
 
     # Показываем вопрос о причине
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1687,7 +1732,7 @@ async def handle_child_name_or_other(message: Message):
     """
 
     user_id = message.from_user.id
-    state = user_state.get(user_id, {})
+    state = get_user_state(user_id)
 
     # Если мы НЕ ждём сейчас имя ребёнка — можно просто ничего не делать или обработать по-другому
     if not state.get("awaiting_child_name"):
@@ -1702,7 +1747,7 @@ async def handle_child_name_or_other(message: Message):
     # Сохраняем имя во временное состояние
     state["awaiting_child_name"] = False
     state["new_child_name"] = child_name
-    user_state[user_id] = state
+    set_user_state(user_id, state)
 
     # Показываем выбор возрастной группы для этого ребёнка
     keyboard = InlineKeyboardMarkup(
@@ -1736,7 +1781,7 @@ async def set_new_child_age(callback: types.CallbackQuery):
     await callback.answer()
 
     user_id = callback.from_user.id
-    state = user_state.get(user_id, {})
+    state = get_user_state(user_id)
 
     child_name = state.get("new_child_name")
     if not child_name:
@@ -1750,17 +1795,17 @@ async def set_new_child_age(callback: types.CallbackQuery):
     age_code = "age_" + "_".join(data.split("_")[3:])  # превращаем в "age_7_10"
 
     # Сохраняем профиль ребёнка
-    user_children = children.get(user_id, [])
+    user_children = get_children(user_id)
 
     user_children.append({
         "name": child_name,
         "age_code": age_code,
     })
-    children[user_id] = user_children
+    set_children(user_id, user_children)
 
     # Очищаем временное поле
     state["new_child_name"] = None
-    user_state[user_id] = state
+    set_user_state(user_id, state)
 
     # Возвращаемся на экран выбора ребёнка
     buttons = []
@@ -1811,7 +1856,7 @@ async def select_child(callback: types.CallbackQuery):
     await callback.answer()
 
     user_id = callback.from_user.id
-    user_children = children.get(user_id, [])
+    user_children = get_children(user_id)
 
     data = callback.data  # например, "select_child_0"
     try:
@@ -1829,15 +1874,18 @@ async def select_child(callback: types.CallbackQuery):
     age_code = child.get("age_code")
 
     # Обновляем состояние пользователя: выбираем ребёнка и сбрасываем предыдущие ответы диагностики
-    user_state[user_id] = {
-        "child_name": child_name,
-        "age": age_code,
-        "child_behaviour": [],
-        "parent_state": [],
-        "family_dynamic": [],
-        "current_index": 0,
-        "diag_done": False,
-    }
+    set_user_state(
+        user_id,
+        {
+            "child_name": child_name,
+            "age": age_code,
+            "child_behaviour": [],
+            "parent_state": [],
+            "family_dynamic": [],
+            "current_index": 0,
+            "diag_done": False,
+        },
+    )
 
     # Сразу запускаем первый экран мини-диагностики (как раньше после выбора возраста)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1862,7 +1910,7 @@ async def select_child(callback: types.CallbackQuery):
 @dp.message(lambda m: m.text == "/my_games")
 async def show_my_games(message: Message):
     user_id = message.from_user.id
-    fav_ids = user_favorites.get(user_id)
+    fav_ids = get_user_favorites(user_id)
 
     if not fav_ids:
         await message.answer(
@@ -1884,7 +1932,7 @@ async def show_my_games(message: Message):
 @dp.message(lambda m: m.text == "/history")
 async def show_history(message: Message):
     user_id = message.from_user.id
-    history = user_history.get(user_id)
+    history = get_user_history(user_id)
 
     if not history:
         await message.answer(
@@ -1937,7 +1985,7 @@ async def repeat_diagnostics(callback: types.CallbackQuery):
     """
     await callback.answer()
     user_id = callback.from_user.id
-    history = user_history.get(user_id, [])
+    history = get_user_history(user_id)
     data = callback.data
     try:
         index = int(data.split("_")[-1])
@@ -1953,14 +2001,14 @@ async def repeat_diagnostics(callback: types.CallbackQuery):
     child_name = record.get("child_name")
     age_code = record.get("age")
 
-    state = user_state.get(user_id, {})
+    state = get_user_state(user_id)
     state["repeat_history_index"] = index
     state["repeat_child_name"] = child_name
     state["repeat_age"] = age_code
-    user_state[user_id] = state
+    set_user_state(user_id, state)
 
     # Пытаемся найти ребёнка в профилях пользователя
-    user_children = children.get(user_id, [])
+    user_children = get_children(user_id)
     matched_child_index = None
     if child_name and age_code and user_children:
         for idx, child in enumerate(user_children):
@@ -1974,7 +2022,7 @@ async def repeat_diagnostics(callback: types.CallbackQuery):
     # Если совпадение нашли — запускаем диагностику сразу на этого ребёнка
     if matched_child_index is not None:
         # сохраняем выбранного ребёнка в состоянии
-        state = user_state.get(user_id, {})
+        state = get_user_state(user_id)
         state["child_name"] = child_name
         state["age"] = age_code
         state["diag_done"] = False
@@ -1982,7 +2030,7 @@ async def repeat_diagnostics(callback: types.CallbackQuery):
         state.setdefault("parent_state", [])
         state.setdefault("family_dynamic", [])
         state["current_index"] = 0
-        user_state[user_id] = state
+        set_user_state(user_id, state)
 
         # показываем первый экран мини‑диагностики (как после выбора возраста)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -2055,7 +2103,7 @@ async def repeat_diagnostics(callback: types.CallbackQuery):
 @dp.message(lambda m: m.text == "/journal")
 async def show_journal(message: Message):
     user_id = message.from_user.id
-    journal = user_games_journal.get(user_id)
+    journal = get_user_games_journal(user_id)
 
     if not journal:
         await message.answer(
@@ -2127,7 +2175,7 @@ async def show_journal(message: Message):
 @dp.callback_query(lambda c: c.data == "show_favorites")
 async def show_favorites_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    fav_ids = user_favorites.get(user_id)
+    fav_ids = get_user_favorites(user_id)
 
     if not fav_ids:
         await callback.message.edit_text(
@@ -2156,17 +2204,17 @@ async def continue_route(callback: types.CallbackQuery):
     Обработчик кнопки «▶️ Продолжить» на главном экране.
 
     Логика очень простая:
-    1) Смотрим, есть ли у пользователя прогресс в словаре user_progress.
+    1) Смотрим, есть ли у пользователя прогресс в БД (user_progress).
     2) Если прогресса нет — мягко отправляем его к диагностике / выбору фокуса.
     3) Если прогресс есть:
        - смотрим, какой фокус выбран: contact / conflicts / self_help;
        - смотрим, на каком шаге он сейчас (step от 1 до 10);
        - в зависимости от этого показываем:
          а) если это самый первый шаг — текст первого шага по нужному фокусу;
-         б) если уже есть focus_step в user_state — просто вызываем логику выдачи следующих шагов (focus_more_step).
+         б) если уже есть focus_step в состоянии пользователя — просто вызываем логику выдачи следующих шагов (focus_more_step).
     """
     user_id = callback.from_user.id
-    state = user_state.get(user_id, {})
+    state = get_user_state(user_id)
     child_name = state.get("child_name")
 
     if not child_name:
@@ -2180,7 +2228,7 @@ async def continue_route(callback: types.CallbackQuery):
     key = (user_id, child_name)
 
     # 1. Проверяем, есть ли прогресс для этого ребёнка
-    progress = user_progress.get(key)
+    progress = get_user_progress(key[0], key[1])
 
     if not progress:
         await callback.answer()
@@ -2195,7 +2243,7 @@ async def continue_route(callback: types.CallbackQuery):
     step_from_progress = progress.get("step", 1)
 
     # Достаём текущее состояние пользователя (там мы храним focus и focus_step)
-    state = user_state.get(user_id, {})
+    state = get_user_state(user_id)
     focus_in_state = state.get("focus")
     focus_step_in_state = state.get("focus_step")
 
@@ -2203,7 +2251,7 @@ async def continue_route(callback: types.CallbackQuery):
     if not focus_in_state:
         state["focus"] = focus
         state["focus_step"] = max(1, min(step_from_progress, 10))
-        user_state[user_id] = state
+        set_user_state(user_id, state)
         focus_step_in_state = state["focus_step"]
 
     # 2. Если шаг ещё совсем начальный (<=2), показываем первый блок шагов по фокусу
@@ -2284,7 +2332,7 @@ async def show_history(callback: types.CallbackQuery):
     """
     await callback.answer()
     user_id = callback.from_user.id
-    history = user_history.get(user_id, [])
+    history = get_user_history(user_id)
 
     if not history:
         await callback.message.edit_text(
@@ -2344,7 +2392,7 @@ async def show_history(callback: types.CallbackQuery):
 @dp.callback_query(lambda c: c.data == "show_journal_callback")
 async def show_journal_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    journal = user_games_journal.get(user_id)
+    journal = get_user_games_journal(user_id)
 
     if not journal:
         await callback.answer()
