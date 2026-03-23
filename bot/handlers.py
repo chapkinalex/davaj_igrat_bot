@@ -54,6 +54,15 @@ FAST_GOAL_TO_FOCUS = {
     "fast_goal_parent_calm": "selfcare",
 }
 
+AGE_DISPLAY_MAP = {
+    "age_2_5": "2–5 лет",
+    "age_5_7": "5–7 лет",
+    "age_6_7": "6–7 лет",
+    "age_7_10": "7–10 лет",
+    "age_10_12": "10–12 лет",
+    "age_teen": "подросток",
+}
+
 AGE_TEXT_MAP = {
     "age_2_5": "2–5 лет",
     "age_6_7": "6–7 лет",
@@ -85,6 +94,7 @@ def get_start_keyboard():
             [InlineKeyboardButton(text="🎮 Быстрый подбор игры", callback_data="fast_pick_start")],
             [InlineKeyboardButton(text="🔎 Разобраться глубже", callback_data="start_diagnostics")],
             [InlineKeyboardButton(text="📓 Мой журнал / позже", callback_data="show_journal_callback")],
+            [InlineKeyboardButton(text="🆘 Помощь прямо сейчас", callback_data="urgent_help")],
         ]
     )
 
@@ -151,8 +161,7 @@ async def start_handler(message: Message):
 async def back_to_main(callback: types.CallbackQuery):
     await callback.answer()
     await callback.message.edit_text(
-        "Привет! Я помогаю родителям через игры наладить контакт с ребёнком "
-        "и сделать дома спокойнее.\n\nС чего начнём?",
+        "Главное меню. С чего начнём?",
         reply_markup=get_start_keyboard(),
     )
 
@@ -163,7 +172,7 @@ async def fast_pick_start(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await state.set_state(FastFlowStates.AGE)
     await callback.message.edit_text(
-        "Супер, давайте подберём игру. Сначала выберите возраст ребёнка.",
+        "Хорошо, подберём игру быстро. Сколько лет ребёнку?",
         reply_markup=get_fast_age_keyboard(),
     )
 
@@ -192,7 +201,7 @@ async def fast_problem_selected(callback: types.CallbackQuery, state: FSMContext
     await state.update_data(problems=problems)
     await state.set_state(FastFlowStates.GOAL)
     await callback.message.edit_text(
-        "Чего вам больше всего хочется сейчас изменить?",
+        "Что сейчас важнее всего изменить?",
         reply_markup=get_fast_goal_keyboard(),
     )
 
@@ -239,10 +248,8 @@ async def fast_goal_selected(callback: types.CallbackQuery, state: FSMContext):
         return
 
     await callback.message.edit_text(
-        "Поняла ваш запрос.\n"
-        "По вашим ответам я подобрала игры, с которых можно начать изменения.\n"
-        "Сейчас покажу первую игру. Попробуйте её в ближайшие дни — "
-        "важен не идеальный результат, а сам шаг.",
+        "Отлично, подобрала игры под вашу ситуацию.\n"
+        "Покажу первую — попробуйте в ближайшие дни.",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text="Показать первую игру", callback_data="fast_show_first_game")]
@@ -270,11 +277,10 @@ async def fast_show_first_game(callback: types.CallbackQuery, state: FSMContext)
         return
 
     await state.update_data(current_index=0)
-    age_map = {"age_2_5": "2–5 лет", "age_5_7": "5–7 лет", "age_7_10": "7–10 лет", "age_teen": "подросток"}
-    age_text = age_map.get(age_code, "неизвестный возраст")
+    age_text = AGE_DISPLAY_MAP.get(age_code, "неизвестный возраст")
     await show_game_card(callback.message, game, age_text, problems, PROBLEM_TEXT_MAP_FAST)
     await callback.message.answer(
-        "Если игра откликнулась, можно сохранить её в свой небольшой «журнал» и вернуться к ней позже.",
+        "Понравилась игра? Сохраните в журнал, чтобы не потерять.",
         reply_markup=get_fast_after_game_keyboard(),
     )
 
@@ -310,8 +316,7 @@ async def fast_show_next_game(callback: types.CallbackQuery, state: FSMContext):
         return
 
     await state.update_data(current_index=next_index)
-    age_map = {"age_2_5": "2–5 лет", "age_5_7": "5–7 лет", "age_7_10": "7–10 лет", "age_teen": "подросток"}
-    age_text = age_map.get(age_code, "неизвестный возраст")
+    age_text = AGE_DISPLAY_MAP.get(age_code, "неизвестный возраст")
     await show_game_card(callback.message, game, age_text, problems, PROBLEM_TEXT_MAP_FAST)
     await callback.message.answer(
         "Если игра откликнулась, можно сохранить её в свой небольшой «журнал» и вернуться к ней позже.",
@@ -1121,8 +1126,9 @@ async def show_result(callback: types.CallbackQuery):
     history = get_user_history(user_id)
     comparison_text = None
 
-    if history:
-        last_record = history[-1]  # самая последняя диагностика до текущей
+    # history[-1] — это текущая запись, предыдущая — [-2]
+    if len(history) >= 2:
+        last_record = history[-2]
 
         base_cb = len(last_record.get("child_behaviour", []))
         base_ps = len(last_record.get("parent_state", []))
@@ -1142,7 +1148,7 @@ async def show_result(callback: types.CallbackQuery):
         comparison_text = "\n".join(comparison_lines)
 
         # Добавляем этот блок в общий текст, если это не самая первая диагностика
-        if len(history) > 0:
+        if len(history) >= 2 and comparison_text:
             result_parts.append(comparison_text)
 
 
@@ -1600,13 +1606,6 @@ async def after_scenario_next(callback: types.CallbackQuery):
         await callback.answer("Сначала пройди мини‑диагностику 🙂", show_alert=True)
         return
 
-    age_map = {
-        "age_2_5": "2–5 лет",
-        "age_6_7": "6–7 лет",
-        "age_7_10": "7–10 лет",
-        "age_10_12": "10–12 лет",
-        "age_teen": "подросток"
-    }
     problem_map = {
         "prob_disobedience": "Непослушание",
         "prob_gadgets": "Гаджеты",
@@ -1614,7 +1613,7 @@ async def after_scenario_next(callback: types.CallbackQuery):
         "prob_trust": "Нет доверия"
     }
 
-    age_text = age_map.get(state["age"], "неизвестный возраст")
+    age_text = AGE_DISPLAY_MAP.get(state["age"], "неизвестный возраст")
     problems_codes = state.get("problems", [])
     suitable_ids = state.get("suitable_ids", [])
 
@@ -1641,13 +1640,6 @@ async def next_game(callback: types.CallbackQuery):
         await callback.answer("Сначала подбери игры через «Показать результат» 🙂", show_alert=True)
         return
 
-    age_map = {
-        "age_2_5": "2–5 лет",
-        "age_6_7": "6–7 лет",
-        "age_7_10": "7–10 лет",
-        "age_10_12": "10–12 лет",
-        "age_teen": "подросток"
-    }
     problem_map = {
         "prob_disobedience": "Непослушание",
         "prob_gadgets": "Гаджеты",
@@ -1655,7 +1647,7 @@ async def next_game(callback: types.CallbackQuery):
         "prob_trust": "Нет доверия"
     }
 
-    age_text = age_map.get(state["age"], "неизвестный возраст")
+    age_text = AGE_DISPLAY_MAP.get(state["age"], "неизвестный возраст")
     problems_codes = state.get("problems", [])
     ids = state["suitable_ids"]
     idx = state.get("current_index", 0)
@@ -2167,9 +2159,6 @@ async def show_history(message: Message):
             lines.append(f"{idx}. {created_at} — возраст: {age_label}")
         else:
             lines.append(f"{idx}. Возраст: {age_label}")
-
-
-        lines.append(f"{idx}. Возраст: {age_label}")
         if behaviours:
             labels = [BEHAVIOUR_LABELS.get(c, c) for c in behaviours]
             lines.append("   • Поведение: " + ", ".join(labels))
@@ -2311,6 +2300,46 @@ async def repeat_diagnostics(callback: types.CallbackQuery):
 
 
 
+def _build_journal_text(journal: list) -> str:
+    total_games = len(journal)
+    played = len([e for e in journal if e.get("status") == "played"])
+    liked = len([e for e in journal if e.get("status") == "played" and e.get("rating") == "liked"])
+    not_played = len([e for e in journal if e.get("status") == "not_played"])
+    success_rate = int((liked / total_games * 100)) if total_games > 0 else 0
+
+    lines = [
+        "📘 Журнал игр:\n",
+        "📊 Статистика:",
+        f"  • Всего попробовали игр: {total_games}",
+        f"  • Сыграли: {played}",
+        f"  • Понравилось: {liked}",
+        f"  • Не получилось сейчас: {not_played}",
+        f"  • Процент успеха: {success_rate}%",
+        "",
+        "🎮 Подробный список:",
+    ]
+    for idx, entry in enumerate(journal, start=1):
+        game_id = entry.get("game_id")
+        status = entry.get("status")
+        rating = entry.get("rating")
+        reason = entry.get("reason", "")
+        created_at = entry.get("created_at", "")
+        game = next((g for g in GAMES if g["id"] == game_id), None)
+        title = game["title"] if game else f"Игра {game_id}"
+        if status == "played":
+            emoji = "✅" if rating == "liked" else "❌"
+            status_text = "сыграли, понравилось" if rating == "liked" else "сыграли, не понравилось"
+        else:
+            emoji = "⏸"
+            status_text = "не получилось (попробуем позже)" if rating == "retry" else "не подходит нам"
+        reason_text = f" — {reason}" if reason else ""
+        date_text = f" ({created_at})" if created_at else ""
+        lines.append(f"{idx}. {emoji} {title}")
+        lines.append(f"   {status_text}{reason_text}{date_text}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 @dp.message(lambda m: m.text == "/journal")
 async def show_journal(message: Message):
     user_id = message.from_user.id
@@ -2324,59 +2353,8 @@ async def show_journal(message: Message):
         )
         return
 
-    # Считаем статистику
-    total_games = len(journal)
-    played = len([e for e in journal if e.get("status") == "played"])
-    liked = len([e for e in journal if e.get("status") == "played" and e.get("rating") == "liked"])
-    not_played = len([e for e in journal if e.get("status") == "not_played"])
-    
-    success_rate = int((liked / total_games * 100)) if total_games > 0 else 0
-
-    lines = [
-        "📘 Журнал игр:\n",
-        f"📊 Статистика:",
-        f"  • Всего попробовали игр: {total_games}",
-        f"  • Сыграли: {played}",
-        f"  • Понравилось: {liked}",
-        f"  • Не получилось сейчас: {not_played}",
-        f"  • Процент успеха: {success_rate}%",
-        ""
-    ]
-
-    lines.append("🎮 Подробный список:")
-    for idx, entry in enumerate(journal, start=1):
-        game_id = entry.get("game_id")
-        status = entry.get("status")
-        rating = entry.get("rating")
-        reason = entry.get("reason", "")
-        created_at = entry.get("created_at", "")
-
-        game = next((g for g in GAMES if g["id"] == game_id), None)
-        title = game["title"] if game else f"Игра {game_id}"
-
-        # Формируем строку с информацией
-        if status == "played":
-            if rating == "liked":
-                emoji = "✅"
-                status_text = "сыграли, понравилось"
-            else:
-                emoji = "❌"
-                status_text = "сыграли, не понравилось"
-        else:  # not_played
-            emoji = "⏸"
-            if rating == "retry":
-                status_text = "не получилось (попробуем позже)"
-            else:
-                status_text = "не подходит нам"
-
-        reason_text = f" — {reason}" if reason else ""
-        date_text = f" ({created_at})" if created_at else ""
-
-        lines.append(f"{idx}. {emoji} {title}")
-        lines.append(f"   {status_text}{reason_text}{date_text}")
-        lines.append("")
-
-    await message.answer("\n".join(lines))
+    text = _build_journal_text(journal)
+    await message.answer(text)
 
 
 
@@ -2618,62 +2596,13 @@ async def show_journal_callback(callback: types.CallbackQuery):
         )
         return
 
-    # Считаем статистику
-    total_games = len(journal)
-    played = len([e for e in journal if e.get("status") == "played"])
-    liked = len([e for e in journal if e.get("status") == "played" and e.get("rating") == "liked"])
-    not_played = len([e for e in journal if e.get("status") == "not_played"])
-    
-    success_rate = int((liked / total_games * 100)) if total_games > 0 else 0
-
-    lines = [
-        "📘 Журнал игр:\n",
-        f"📊 Статистика:",
-        f"  • Всего попробовали игр: {total_games}",
-        f"  • Сыграли: {played}",
-        f"  • Понравилось: {liked}",
-        f"  • Не получилось сейчас: {not_played}",
-        f"  • Процент успеха: {success_rate}%",
-        ""
-    ]
-
-    lines.append("🎮 Подробный список:")
-    for idx, entry in enumerate(journal, start=1):
-        game_id = entry.get("game_id")
-        status = entry.get("status")
-        rating = entry.get("rating")
-        reason = entry.get("reason", "")
-        created_at = entry.get("created_at", "")
-
-        game = next((g for g in GAMES if g["id"] == game_id), None)
-        title = game["title"] if game else f"Игра {game_id}"
-
-        if status == "played":
-            if rating == "liked":
-                emoji = "✅"
-                status_text = "сыграли, понравилось"
-            else:
-                emoji = "❌"
-                status_text = "сыграли, не понравилось"
-        else:
-            emoji = "⏸"
-            if rating == "retry":
-                status_text = "не получилось (попробуем позже)"
-            else:
-                status_text = "не подходит нам"
-
-        reason_text = f" — {reason}" if reason else ""
-        date_text = f" ({created_at})" if created_at else ""
-
-        lines.append(f"{idx}. {emoji} {title}")
-        lines.append(f"   {status_text}{reason_text}{date_text}")
-        lines.append("")
+    text = _build_journal_text(journal)
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 На главную", callback_data="back_to_start")]
     ])
     await callback.answer()
-    await callback.message.edit_text("\n".join(lines), reply_markup=keyboard)
+    await callback.message.edit_text(text, reply_markup=keyboard)
 
 
 
@@ -2689,8 +2618,12 @@ async def focus_games_direct(callback: types.CallbackQuery):
 # Кнопка «⬅️ Назад» из избранного — вернуться на /start
 @dp.callback_query(lambda c: c.data == "back_to_start")
 async def back_to_start(callback: types.CallbackQuery):
-    # просто показываем главный экран заново
-    await start_handler(callback.message)
+    await callback.answer()
+    welcome_text = (
+        "Привет! Я помогаю родителям через игры наладить контакт с ребёнком "
+        "и сделать дома спокойнее.\n\nС чего начнём?"
+    )
+    await callback.message.answer(welcome_text, reply_markup=get_start_keyboard())
 
 
 # Показ карточки игры (с «⭐ Мои игры»)
