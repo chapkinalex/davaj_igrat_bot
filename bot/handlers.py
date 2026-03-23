@@ -2,6 +2,8 @@
 from datetime import datetime
 from aiogram import types
 from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 from bot.main import bot, dp
@@ -23,120 +25,329 @@ from data.database import (
 )
 from data.games import GAMES
 
-@dp.message(CommandStart())
-async def start_handler(message: Message):
-    """
-    Главный экран бота.
 
-    Здесь не спрашиваем сразу возраст.
-    Сначала даём родителю выбрать, что он хочет сделать:
-    - начать новую диагностику;
-    - продолжить путь с последней диагностики;
-    - посмотреть историю диагностик;
-    - открыть избранные игры;
-    - открыть журнал игр.
-    """
-    keyboard = InlineKeyboardMarkup(
+class FastFlowStates(StatesGroup):
+    AGE = State()
+    PROBLEM = State()
+    GOAL = State()
+
+
+FAST_AGE_MAP = {
+    "fast_age_3_4": "age_2_5",
+    "fast_age_5_7": "age_5_7",
+    "fast_age_8_10": "age_7_10",
+    "fast_age_11_14": "age_teen",
+}
+
+FAST_PROBLEM_MAP = {
+    "fast_problem_contact": ["prob_silent", "prob_trust"],
+    "fast_problem_conflicts": ["prob_disobedience"],
+    "fast_problem_emotions": ["prob_disobedience", "prob_trust"],
+    "fast_problem_anxiety": ["prob_trust"],
+    "fast_problem_parent": ["prob_trust"],
+}
+
+FAST_GOAL_TO_FOCUS = {
+    "fast_goal_contact": "contact",
+    "fast_goal_less_conflicts": "conflicts",
+    "fast_goal_help_emotions": "contact",
+    "fast_goal_parent_calm": "selfcare",
+}
+
+AGE_TEXT_MAP = {
+    "age_2_5": "2–5 лет",
+    "age_6_7": "6–7 лет",
+    "age_7_10": "7–10 лет",
+    "age_10_12": "10–12 лет",
+    "age_teen": "подросток",
+}
+
+PROBLEM_TEXT_MAP_FAST = {
+    "prob_disobedience": "Непослушание",
+    "prob_gadgets": "Гаджеты",
+    "prob_silent": "Молчит",
+    "prob_trust": "Нет доверия",
+}
+
+
+def build_suitable_ids(problems_codes):
+    suitable_ids = []
+    for game in GAMES:
+        game_problems = game.get("problems", [])
+        if any(prob in problems_codes for prob in game_problems):
+            suitable_ids.append(game["id"])
+    return suitable_ids if suitable_ids else [g["id"] for g in GAMES[:5]]
+
+
+def get_start_keyboard():
+    return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🧪 Начать новую диагностику",
-                    callback_data="start_diagnostics"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="▶️ Продолжить с прошлой диагностики",
-                    callback_data="continue_route"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🔥 Срочно, сейчас тяжело",
-                    callback_data="urgent_help"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🧾 История диагностик",
-                    callback_data="show_history"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⭐ Избранное",
-                    callback_data="show_favorites"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📘 Журнал игр",
-                    callback_data="show_journal_callback"
-                ),
-            ],
+            [InlineKeyboardButton(text="🎮 Быстрый подбор игры", callback_data="fast_pick_start")],
+            [InlineKeyboardButton(text="🔎 Разобраться глубже", callback_data="start_diagnostics")],
+            [InlineKeyboardButton(text="📓 Мой журнал / позже", callback_data="show_journal_callback")],
         ]
     )
 
-    welcome_text = (
-        "Привет! 👋 Я бот «Давай играть» — помогаю родителям чуть лучше понять "
-        "ситуацию с ребёнком и подобрать простые шаги и игры под вашу семью.\n\n"
-        "Здесь можно:\n"
-        "• пройти короткую мини‑диагностику — отметить, что сейчас важнее всего;\n"
-        "• получить пошаговые идеи — больше контакта, меньше ссор или опора для себя;\n"
-        "• подобрать игры под возраст и ситуацию и вести журнал, что попробовали.\n\n"
-        "Если прямо сейчас тяжело — есть раздел «Срочно, сейчас тяжело» без долгих вопросов.\n\n"
-        "Выберите, с чего начнём:"
+
+def get_fast_age_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="3–4 года", callback_data="fast_age_3_4")],
+            [InlineKeyboardButton(text="5–7 лет", callback_data="fast_age_5_7")],
+            [InlineKeyboardButton(text="8–10 лет", callback_data="fast_age_8_10")],
+            [InlineKeyboardButton(text="11–14 лет", callback_data="fast_age_11_14")],
+        ]
     )
-    await message.answer(welcome_text, reply_markup=keyboard)
+
+
+def get_fast_problem_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Мало контакта, ребёнок отдалился", callback_data="fast_problem_contact")],
+            [InlineKeyboardButton(text="Много конфликтов и крика", callback_data="fast_problem_conflicts")],
+            [InlineKeyboardButton(text="Сильные эмоции, истерики, слёзы", callback_data="fast_problem_emotions")],
+            [InlineKeyboardButton(text="Тревога, неуверенность у ребёнка", callback_data="fast_problem_anxiety")],
+            [InlineKeyboardButton(text="Мне самой/самому очень тяжело", callback_data="fast_problem_parent")],
+        ]
+    )
+
+
+def get_fast_goal_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Больше тёплого контакта", callback_data="fast_goal_contact")],
+            [InlineKeyboardButton(text="Меньше ссор и крика", callback_data="fast_goal_less_conflicts")],
+            [InlineKeyboardButton(text="Помочь ребёнку с эмоциями", callback_data="fast_goal_help_emotions")],
+            [InlineKeyboardButton(text="Стать спокойнее самому/самой", callback_data="fast_goal_parent_calm")],
+        ]
+    )
+
+
+def get_fast_first_game_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Показать первую игру", callback_data="fast_show_first_game")]]
+    )
+
+
+def get_fast_after_game_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Сохранить в журнал", callback_data="fast_save_to_journal")],
+            [InlineKeyboardButton(text="🎮 Показать ещё одну игру", callback_data="fast_show_next_game")],
+            [InlineKeyboardButton(text="🔎 Хочу разобраться глубже", callback_data="start_diagnostics")],
+        ]
+    )
+
+@dp.message(CommandStart())
+async def start_handler(message: Message):
+    welcome_text = (
+        "Привет! Я помогаю родителям через игры наладить контакт с ребёнком "
+        "и сделать дома спокойнее.\n\nС чего начнём?"
+    )
+    await message.answer(welcome_text, reply_markup=get_start_keyboard())
 
 
 @dp.callback_query(lambda c: c.data == "back_to_main")
 async def back_to_main(callback: types.CallbackQuery):
-    """
-    Возврат в главное меню (то же самое, что /start).
-    """
     await callback.answer()
-
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🧪 Начать новую диагностику",
-                    callback_data="start_diagnostics"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="▶️ Продолжить с прошлой диагностики",
-                    callback_data="continue_route"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🧾 История диагностик",
-                    callback_data="show_history"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⭐ Избранное",
-                    callback_data="show_favorites"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📘 Журнал игр",
-                    callback_data="show_journal_callback"
-                ),
-            ],
-        ]
+    await callback.message.edit_text(
+        "Привет! Я помогаю родителям через игры наладить контакт с ребёнком "
+        "и сделать дома спокойнее.\n\nС чего начнём?",
+        reply_markup=get_start_keyboard(),
     )
+
+
+@dp.callback_query(lambda c: c.data == "fast_pick_start")
+async def fast_pick_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.clear()
+    await state.set_state(FastFlowStates.AGE)
+    await callback.message.edit_text(
+        "Супер, давайте подберём игру. Сначала выберите возраст ребёнка.",
+        reply_markup=get_fast_age_keyboard(),
+    )
+
+
+@dp.callback_query(lambda c: c.data.startswith("fast_age_"))
+async def fast_age_selected(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    age_code = FAST_AGE_MAP.get(callback.data)
+    if not age_code:
+        await callback.answer("Не удалось определить возраст", show_alert=True)
+        return
+
+    await state.update_data(age=age_code)
+    await state.set_state(FastFlowStates.PROBLEM)
+    await callback.message.edit_text(
+        "Что больше всего беспокоит сейчас в отношениях с ребёнком?",
+        reply_markup=get_fast_problem_keyboard(),
+    )
+
+
+@dp.callback_query(lambda c: c.data.startswith("fast_problem_"))
+async def fast_problem_selected(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    problems = FAST_PROBLEM_MAP.get(callback.data, ["prob_trust"])
+
+    await state.update_data(problems=problems)
+    await state.set_state(FastFlowStates.GOAL)
+    await callback.message.edit_text(
+        "Чего вам больше всего хочется сейчас изменить?",
+        reply_markup=get_fast_goal_keyboard(),
+    )
+
+
+@dp.callback_query(lambda c: c.data.startswith("fast_goal_"))
+async def fast_goal_selected(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    focus = FAST_GOAL_TO_FOCUS.get(callback.data)
+    data = await state.get_data()
+    age_code = data.get("age")
+    problems = data.get("problems", [])
+
+    if not age_code or not problems or not focus:
+        await callback.answer("Начните быстрый подбор заново 🙂", show_alert=True)
+        return
+
+    suitable_ids = build_suitable_ids(problems)
+    total_games = len(suitable_ids)
+    await state.update_data(focus=focus, suitable_ids=suitable_ids, current_index=0)
+
+    user_id = callback.from_user.id
+    user_state_data = get_user_state(user_id)
+    user_state_data.update(
+        {
+            "age": age_code,
+            "problems": problems,
+            "focus": focus,
+            "suitable_ids": suitable_ids,
+            "current_index": -1,
+        }
+    )
+    set_user_state(user_id, user_state_data)
+
+    if total_games == 0:
+        await callback.message.edit_text(
+            "По вашим ответам я не нашла подходящих игр в своей базе.\n"
+            "Можно пройти более подробную диагностику — так я подберу идеи точнее.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="🔎 Пройти подробную диагностику", callback_data="start_diagnostics")]
+                ]
+            ),
+        )
+        return
 
     await callback.message.edit_text(
-        "Главное меню «Давай играть»:\n\n"
-        "Выберите, что хотите сделать сейчас:",
-        reply_markup=keyboard
+        "Поняла ваш запрос.\n"
+        "По вашим ответам я подобрала игры, с которых можно начать изменения.\n"
+        "Сейчас покажу первую игру. Попробуйте её в ближайшие дни — "
+        "важен не идеальный результат, а сам шаг.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="Показать первую игру", callback_data="fast_show_first_game")]
+            ]
+        ),
     )
+
+
+@dp.callback_query(lambda c: c.data == "fast_show_first_game")
+async def fast_show_first_game(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    data = await state.get_data()
+    suitable_ids = data.get("suitable_ids", [])
+    age_code = data.get("age")
+    problems = data.get("problems", [])
+
+    if not suitable_ids or not age_code:
+        await callback.answer("Сначала пройдите быстрый подбор 🙂", show_alert=True)
+        return
+
+    first_id = suitable_ids[0]
+    game = next((g for g in GAMES if g["id"] == first_id), None)
+    if not game:
+        await callback.answer("Не удалось загрузить игру", show_alert=True)
+        return
+
+    await state.update_data(current_index=0)
+    age_map = {"age_2_5": "2–5 лет", "age_5_7": "5–7 лет", "age_7_10": "7–10 лет", "age_teen": "подросток"}
+    age_text = age_map.get(age_code, "неизвестный возраст")
+    await show_game_card(callback.message, game, age_text, problems, PROBLEM_TEXT_MAP_FAST)
+    await callback.message.answer(
+        "Если игра откликнулась, можно сохранить её в свой небольшой «журнал» и вернуться к ней позже.",
+        reply_markup=get_fast_after_game_keyboard(),
+    )
+
+
+@dp.callback_query(lambda c: c.data == "fast_show_next_game")
+async def fast_show_next_game(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    data = await state.get_data()
+    suitable_ids = data.get("suitable_ids", [])
+    age_code = data.get("age")
+    problems = data.get("problems", [])
+    current_index = data.get("current_index", 0)
+
+    if not suitable_ids or not age_code:
+        await callback.answer("Сначала пройдите быстрый подбор 🙂", show_alert=True)
+        return
+
+    next_index = current_index + 1
+    if next_index >= len(suitable_ids):
+        await callback.message.answer(
+            "Игры по вашим ответам закончились, можно пройти подробную диагностику",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="🔎 Хочу разобраться глубже", callback_data="start_diagnostics")]
+                ]
+            ),
+        )
+        return
+
+    game = next((g for g in GAMES if g["id"] == suitable_ids[next_index]), None)
+    if not game:
+        await callback.answer("Не удалось загрузить игру", show_alert=True)
+        return
+
+    await state.update_data(current_index=next_index)
+    age_map = {"age_2_5": "2–5 лет", "age_5_7": "5–7 лет", "age_7_10": "7–10 лет", "age_teen": "подросток"}
+    age_text = age_map.get(age_code, "неизвестный возраст")
+    await show_game_card(callback.message, game, age_text, problems, PROBLEM_TEXT_MAP_FAST)
+    await callback.message.answer(
+        "Если игра откликнулась, можно сохранить её в свой небольшой «журнал» и вернуться к ней позже.",
+        reply_markup=get_fast_after_game_keyboard(),
+    )
+
+
+@dp.callback_query(lambda c: c.data == "fast_save_to_journal")
+async def fast_save_to_journal(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    data = await state.get_data()
+    suitable_ids = data.get("suitable_ids", [])
+    current_index = data.get("current_index", 0)
+
+    if not suitable_ids:
+        await callback.answer("Сначала пройдите быстрый подбор 🙂", show_alert=True)
+        return
+
+    if current_index < 0 or current_index >= len(suitable_ids):
+        await callback.answer("Не удалось понять, какую игру сохранить", show_alert=True)
+        return
+
+    game_id = suitable_ids[current_index]
+    user_id = callback.from_user.id
+    journal = get_user_games_journal(user_id)
+    journal.append(
+        {
+            "game_id": game_id,
+            "status": "saved_fast",
+            "rating": "saved",
+            "reason": "Сохранено из быстрого подбора",
+            "created_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
+        }
+    )
+    set_user_games_journal(user_id, journal)
+    await callback.message.answer("✅ Сохранила в журнал. Можно открыть его в любой момент.")
 
 
 @dp.callback_query(lambda c: c.data == "urgent_help")
